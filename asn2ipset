@@ -1,0 +1,167 @@
+#!/usr/bin/env perl
+
+# Tool for generate ipsets by AS Numbers
+
+# ------------------------------------------------------------------------------
+
+use strict;
+use warnings;
+use diagnostics;
+use utf8;
+use 5.010;
+
+binmode(STDOUT, ":encoding(UTF-8)");
+
+my $IPV4_META_SET_NAME='blocked_ipv4_as_meta_set';
+my $IPV4_DEFAULT_SET_HASHSIZE=1024;
+my $IPV4_DEFAULT_SET_MAXELEM=1024;
+
+my $IPV6_META_SET_NAME='blocked_ipv6_as_meta_set';
+my $IPV6_DEFAULT_SET_HASHSIZE=1024;
+my $IPV6_DEFAULT_SET_MAXELEM=1024;
+my $BGPQ3 = '/usr/bin/bgpq3';
+my $IPSET = '/usr/sbin/ipset';
+
+if (-X $BGPQ3) { } else {
+    say "critical: bgpq3 tool not found! exit.";
+    exit 1;
+}
+
+if (-X $IPSET) { } else {
+    say "critical: ipset tool not found! exit.";
+    exit 1;
+}
+
+# Test ipset meta list exists create it, if not
+system ("$IPSET list $IPV4_META_SET_NAME &> /dev/null");
+if ($? == 0) { } else {
+    system("$IPSET create $IPV4_META_SET_NAME list:set");
+}
+
+system ("$IPSET list $IPV6_META_SET_NAME &> /dev/null");
+if ($? == 0) { } else {
+    system("$IPSET create $IPV6_META_SET_NAME list:set");
+}
+
+sub create_ipset {
+
+    my $name = $_[0];
+    my $family = $_[1];
+    my ($hashsize, $maxelem);
+    my $rvalue = -1;
+    
+    if ($family == 4) {
+        $family = 'inet';
+        $hashsize = $IPV4_DEFAULT_SET_HASHSIZE;
+        $maxelem = $IPV4_DEFAULT_SET_MAXELEM;
+    } elsif ($family == 6) {
+        $family = 'inet6';
+        $hashsize = $IPV6_DEFAULT_SET_HASHSIZE;
+        $maxelem = $IPV6_DEFAULT_SET_MAXELEM;
+    } else {
+        say "internal critical: unknown family: $family";
+        exit 1;
+    }
+
+    system ("IPSET -q list $name &> /dev/null");
+    if ($? == 0) { } else {
+        system("$IPSET create $name hash:net family $family hashsize $hashsize maxelem $maxelem");
+        $rvalue = $?;
+    }
+
+    return $rvalue;
+}
+
+sub lookup_subnets {
+
+    my $as = $_[0];
+    my $family = $_[1];
+    my @subnets;
+    
+
+    if ($family == 4 or $family == 6) { } else {
+        say "internal critical: unknown family: $family";
+        exit 1;        
+    }
+    
+    my @out = `$BGPQ3 -$family AS$as | awk '{print \$5}'`;
+    foreach my $entry (@out) {
+
+        if ($entry =~ '^0\.0\.0\.0/0$' or 
+            $entry =~ '^::/0$') {
+
+            say "warning: empty ipv$family AS detected!, skipping ...";
+            @subnets[0] = 'empty';
+        }
+        
+        if ($entry =~ '^$') { } else {
+            push (@subnets, $entry);
+        }
+    }
+
+    return \@subnets;
+}
+
+sub add_to_ipset {
+
+    my $ipset = $_[0];
+    my @new_subnets = @{ $_[1] };
+    my $rvalue = -1;
+
+    foreach my $subnet (@new_subnets) {
+        system ("$IPSET -exist add $ipset $subnet");
+        $rvalue = $?;
+    }
+
+    return $rvalue;
+}
+
+sub add_to_meta_ipset {
+
+    my $ipset = $_[0];
+    my $family = $_[1];
+
+    if ($family == 4) {
+        system("$IPSET -exist add $IPV4_META_SET_NAME $ipset");
+    } elsif ($family == 6) {
+        system("$IPSET -exist add $IPV6_META_SET_NAME $ipset");
+    } else {
+        say "internal critical: unknown family: $family";
+        exit 1;     
+    }
+}
+
+if (defined $ARGV[1] and $ARGV[1] =~ '[0-9]+') { } else {
+    say "usage: asn2ipset ASN1 ASN2 ...";
+    say "example: asn2ipset 12 345 6789";
+}
+
+foreach my $arg (@ARGV) {
+    if ($arg =~ '^[0-9]+$') { } else {
+        say "error: $arg : ASN must be specified as number!";
+        last;
+    }
+    
+    my $as = $arg;
+    my @family = (4, 6);
+    
+    foreach my $fam (@family) {
+
+        say "Lookup ipv$fam subnets for AS $as ...";
+        my @founded = @{ lookup_subnets ($as, $fam) };
+
+        # Skip empty AS
+        if ($founded[0] eq 'empty') { } else {
+
+            say "Create ipv$fam ipset for AS $as ...";
+            my $ipset_name = 'blocked_ipv' . $fam . '_as_' . $arg;
+            create_ipset ($ipset_name, $fam);
+    
+            say "Add ipv$fam subnets for AS $arg to ipset $ipset_name ...";
+            add_to_ipset ($ipset_name, \@founded);
+
+            say "Add ipset $ipset_name to meta set ...";
+            add_to_meta_ipset ($ipset_name, $fam);
+        }
+    }
+}

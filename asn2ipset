@@ -2,6 +2,8 @@
 
 # Tool for generate ipsets by AS Numbers
 
+# See ftp://ftp.arin.net/info/asn.txt for full AS list
+
 # ------------------------------------------------------------------------------
 
 use strict;
@@ -14,51 +16,155 @@ use Getopt::Long;
 
 binmode(STDOUT, ":encoding(UTF-8)");
 
+my %config = (
+    'prefix' => 'asn2ipset',
+    'ipset' => '/usr/sbin/ipset',
+    'bgpq3' => '/usr/bin/bgpq3',
+    'ipv4_maxelem' => '16384',
+    'ipv4_hashsize' => '1024',
+    'ipv6_maxelem' => '1024',
+    'ipv6_hashsize' => '1024',
+    );
+
 my %cmd = (
     'help' => undef,
     'stdout' => undef,
+    'direct' => undef,
+    'prefix' => undef,
     );
 
 GetOptions (
     'help' => \$cmd{'help'},
-    'stdout' => \$cmd{'stdout'}
+    'stdout=s' => \$cmd{'stdout'},
+    'direct=s' => \$cmd{'direct'},
+    'prefix=s' => \$cmd{'prefix'},
     ) or die 'unknown option';
 
+my $IPV4_META_SET_NAME;
+my $IPV6_META_SET_NAME;
+my $PREFIX;
+
+sub f_check_length {
+
+    my $length = length ($_[0]);
+    my $min = 1;
+    my $max = 31;
+
+    if ( $min <= $length and $length <= $max) {} else {
+        die "critical: prefix too long, ipset's names length must be between 1 and 31 characters";        
+    }
+
+    return 0;
+}
+
+
+if (defined $cmd{'prefix'}) {
+    if ($cmd{'prefix'} =~ '^[a-zA-Z0-9_]+$') {
+        $IPV4_META_SET_NAME=$cmd{'prefix'} . '_ipv4_as_meta_set';
+        $IPV6_META_SET_NAME=$cmd{'prefix'} . '_ipv6_as_meta_set';
+        $PREFIX = $cmd{'prefix'};
+    }
+} else {
+    $IPV4_META_SET_NAME=$config{'prefix'} . '_ipv4_as_meta_set';
+    $IPV6_META_SET_NAME=$config{'prefix'} . '_ipv6_as_meta_set';
+    $PREFIX = $config{'prefix'};
+}
+
+# Chech length for meta set name
+f_check_length ($IPV4_META_SET_NAME);
+f_check_length ($IPV6_META_SET_NAME);
+
+my @asns;
+
+sub f_sanitize {
+
+    my $raw = $_[0];
+
+    my @raw;
+    my @intermediate;
+    my @sanitized;
+
+
+    @intermediate = split /,/, $raw or die "internal critical: unable parse AS numbers list";
+
+    foreach my $entry (@intermediate) {
+        if ($entry >= 1 and $entry <= 4294967296) {
+            push (@sanitized, $entry);
+        } else {
+            warn "$entry : must be integer between 1 and 4294967296";
+        }
+    }
+
+    return \@sanitized;
+}
+
+if (defined $cmd{'stdout'} and defined $cmd{'direct'}) {
+    die "--stdout and --direct flags are mutually exclusive!";
+} elsif (defined $cmd{'stdout'}) {
+    @asns = @{ f_sanitize ($cmd{'stdout'}) };
+} elsif (defined $cmd{'direct'}) {
+    @asns = @{ f_sanitize ($cmd{'direct'}) };
+}
+
+my $IPSET;
+my $BGPQ3;
+if (-X $config{'bgpq3'}) { 
+    $BGPQ3 = $config{'bgpq3'};
+} else {
+    die "critical: bgpq3 tool not found! exit.";
+}
+
+if (defined $cmd{'direct'}) {
+    if ($ENV{'USER'} eq 'root') {
+        if (-X $config{'ipset'}) {
+            $IPSET = $config{'ipset'};
+        } else {
+            die "critical: ipset tool not found! exit.";
+        }
+    } else {
+        die "for --direct mode asn2ipset need root permissions!";
+    }
+}
+
 sub f_help {
-    say "usage: asn2ipset ASN1 ASN2 ...";
-    say "example: asn2ipset 12 345 6789";        
+
+    my $help = q {
+
+  usage: asn2ipset [--prefix <some>] < --direct | --stdout > ASN1,ASN2,ASN3 ...
+  
+  --help   - print this help
+
+  --direct - apply changes directly, need root permissions
+
+  --stdout - generate and print ipsets to stdout without direct changes
+
+  --prefix - prefix for generated ipsets names, default - 'asn2ipset'
+
+  examples:
+
+           generate ipsets for some Google AS and print it to stdout:
+  
+           asn2ipset --stdout 15169,19527
+
+           generate ipsets for Google AS whith prefix 'google' directly:
+
+           asn2ipset --prefix google --direct 15169,19527
+        
+    };
+        
+say $help;
+        
 }
 
 if (defined $cmd{'help'}) {
     f_help;
 }
 
-
-my $IPV4_META_SET_NAME='blocked_ipv4_as_meta_set';
-my $IPV4_DEFAULT_SET_HASHSIZE=1024;
-my $IPV4_DEFAULT_SET_MAXELEM=1024;
-
-my $IPV6_META_SET_NAME='blocked_ipv6_as_meta_set';
-my $IPV6_DEFAULT_SET_HASHSIZE=1024;
-my $IPV6_DEFAULT_SET_MAXELEM=1024;
-my $BGPQ3 = '/usr/bin/bgpq3';
-my $IPSET = '/usr/sbin/ipset';
-
-if (-X $BGPQ3) { } else {
-    say "critical: bgpq3 tool not found! exit.";
-    exit 1;
-}
-
-if (-X $IPSET) { } else {
-    say "critical: ipset tool not found! exit.";
-    exit 1;
-}
-
 sub create_meta_ipset {
 
     my $mode = $_[0];
 
-    if ($mode eq 'kernel') {
+    if ($mode eq 'direct') {
     
         # Test ipset meta list exists create it, if not
         system ("$IPSET list $IPV4_META_SET_NAME &> /dev/null");
@@ -73,7 +179,7 @@ sub create_meta_ipset {
 
     } elsif ($mode eq 'stdout') {
         say "create $IPV4_META_SET_NAME list:set";
-        say "create $IPV4_META_SET_NAME list:set";
+        say "create $IPV6_META_SET_NAME list:set";
     }
 }
 
@@ -87,18 +193,17 @@ sub create_ipset {
     
     if ($family == 4) {
         $family = 'inet';
-        $hashsize = $IPV4_DEFAULT_SET_HASHSIZE;
-        $maxelem = $IPV4_DEFAULT_SET_MAXELEM;
+        $hashsize = $config{'ipv4_hashsize'};
+        $maxelem = $config{'ipv4_maxelem'};
     } elsif ($family == 6) {
         $family = 'inet6';
-        $hashsize = $IPV6_DEFAULT_SET_HASHSIZE;
-        $maxelem = $IPV6_DEFAULT_SET_MAXELEM;
+        $hashsize = $config{'ipv6_hashsize'};
+        $maxelem = $config{'ipv6_maxelem'};
     } else {
-        say "internal critical: unknown family: $family";
-        exit 1;
+        die "internal critical: unknown family: $family";
     }
 
-    if ($mode eq 'kernel') {
+    if ($mode eq 'direct') {
         system ("IPSET -q list $name &> /dev/null");
         if ($? == 0) { } else {
             system("$IPSET create $name hash:net family $family hashsize $hashsize maxelem $maxelem");
@@ -120,8 +225,7 @@ sub lookup_subnets {
     
 
     if ($family == 4 or $family == 6) { } else {
-        say "internal critical: unknown family: $family";
-        exit 1;        
+        die "internal critical: unknown family: $family";        
     }
     
     my @out = `$BGPQ3 -$family AS$as | awk '{print \$5}'`;
@@ -130,7 +234,7 @@ sub lookup_subnets {
         if ($entry =~ '^0\.0\.0\.0/0$' or 
             $entry =~ '^::/0$') {
 
-            say "warning: empty ipv$family AS detected!, skipping ...";
+            warn "warning: empty ipv$family AS $as detected!, skipping ...";
             @subnets[0] = 'empty';
         }
         
@@ -150,7 +254,7 @@ sub add_to_ipset {
     my $rvalue = -1;
 
     foreach my $subnet (@new_subnets) {
-        if ($mode eq 'kernel') {
+        if ($mode eq 'direct') {
             system ("$IPSET -exist add $ipset $subnet");
             $rvalue = $?;
         } elsif ($mode eq 'stdout') {
@@ -169,29 +273,37 @@ sub add_to_meta_ipset {
     my $family = $_[2];
 
     if ($family == 4) {
-        if ($mode eq 'kernel') {
+        if ($mode eq 'direct') {
             system("$IPSET -exist add $IPV4_META_SET_NAME $ipset");
         } elsif ($mode eq 'stdout') {
             say "add $IPV4_META_SET_NAME $ipset";
         }
     } elsif ($family == 6) {
-        if ($mode eq 'kernel') {
+        if ($mode eq 'direct') {
             system("$IPSET -exist add $IPV6_META_SET_NAME $ipset");
         } elsif ($mode eq 'stdout') {
             say "add $IPV6_META_SET_NAME $ipset";
         }    
     } else {
-        say "internal critical: unknown family: $family";
-        exit 1;     
+        die "internal critical: unknown family: $family";     
     }
 }
 
+if (defined $cmd{'stdout'}) {
+    create_meta_ipset ('stdout');
+} elsif (defined $cmd{'direct'}) {
+    create_meta_ipset ('direct');
+}
 
-foreach my $arg (@ARGV) {
-    if ($arg =~ '^[0-9]+$') { } else {
-        say "error: $arg : ASN must be specified as number!";
-        last;
-    }
+# Check ipsets names
+#
+# 'F' - placeholder for family - '4' or '6'
+foreach my $n (@asns) {
+  my $ipset_name = $PREFIX . '_ipv' . 'F' . '_as_' . $n;
+  f_check_length ($ipset_name);
+}
+
+foreach my $arg (@asns) {
     
     my $as = $arg;
     my @family = (4, 6);
@@ -203,29 +315,26 @@ foreach my $arg (@ARGV) {
         # Skip empty AS
         if ($founded[0] eq 'empty') { } else {
 
-            my $ipset_name = 'blocked_ipv' . $fam . '_as_' . $arg;
+            my $ipset_name = $PREFIX . '_ipv' . $fam . '_as_' . $arg;
             
             # Print to stdout, if --stdout flag is defined
             if (defined $cmd{'stdout'}) {
-                create_meta_ipset ('stdout');
                 create_ipset ('stdout', $ipset_name, $fam);
                 add_to_ipset ('stdout', $ipset_name, \@founded);
                 add_to_meta_ipset ('stdout', $ipset_name, $fam);
                 
-            } else {
+            } elsif (defined $cmd{'direct'}) {
                 
                 # Generate and apply ipsets else
-
-                create_meta_ipset ('kernel');
                 
-                say "Create ipv$fam ipset for AS $as ...";
-                create_ipset ('kernel', $ipset_name, $fam);
+                warn "Create ipv$fam ipset for AS $as ...\n";
+                create_ipset ('direct', $ipset_name, $fam);
     
-                say "Add ipv$fam subnets for AS $arg to ipset $ipset_name ...";
-                add_to_ipset ('kernel', $ipset_name, \@founded);
+                warn "Add ipv$fam subnets for AS $arg to ipset $ipset_name ...\n";
+                add_to_ipset ('direct', $ipset_name, \@founded);
 
-                say "Add ipset $ipset_name to meta set ...";
-                add_to_meta_ipset ('kernel', $ipset_name, $fam);
+                warn "Add ipset $ipset_name to meta set ...\n";
+                add_to_meta_ipset ('direct', $ipset_name, $fam);
 
             }
         }

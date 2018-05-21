@@ -13,8 +13,11 @@ use utf8;
 use 5.010;
 
 use Getopt::Long;
+use Carp;
 
 binmode(STDOUT, ":encoding(UTF-8)");
+
+my $VERSION = '210518.0';
 
 my %config = (
     'prefix' => 'asn2ipset',
@@ -28,6 +31,7 @@ my %config = (
 
 my %cmd = (
     'help' => undef,
+    'version' => undef,
     'stdout' => undef,
     'direct' => undef,
     'prefix' => undef,
@@ -35,10 +39,13 @@ my %cmd = (
 
 GetOptions (
     'help' => \$cmd{'help'},
+    'version' => \$cmd{'version'},
     'stdout=s' => \$cmd{'stdout'},
     'direct=s' => \$cmd{'direct'},
     'prefix=s' => \$cmd{'prefix'},
-    ) or die 'unknown option';
+    ) or croak 'unknown option';
+
+if (defined $cmd{'version'}) { carp $VERSION }
 
 my $IPV4_META_SET_NAME;
 my $IPV6_META_SET_NAME;
@@ -46,12 +53,13 @@ my $PREFIX;
 
 sub f_check_length {
 
-    my $length = length ($_[0]);
+    my ($str) = @_;
+    my $length = length ($str);
     my $min = 1;
     my $max = 31;
 
     if ( $min <= $length and $length <= $max) {} else {
-        die "critical: prefix too long, ipset's names length must be between 1 and 31 characters";        
+        croak "critical: prefix too long, ipset's names length must be between 1 and 31 characters";
     }
 
     return 0;
@@ -59,7 +67,7 @@ sub f_check_length {
 
 
 if (defined $cmd{'prefix'}) {
-    if ($cmd{'prefix'} =~ '^[a-zA-Z0-9_]+$') {
+    if ($cmd{'prefix'} =~ m/^[a-zA-Z0-9_]+$/x ) {
         $IPV4_META_SET_NAME=$cmd{'prefix'} . '_ipv4_as_meta_set';
         $IPV6_META_SET_NAME=$cmd{'prefix'} . '_ipv6_as_meta_set';
         $PREFIX = $cmd{'prefix'};
@@ -78,20 +86,18 @@ my @asns;
 
 sub f_sanitize {
 
-    my $raw = $_[0];
-
+    my ($raw) = @_;
     my @raw;
-    my @intermediate;
     my @sanitized;
 
 
-    @intermediate = split /,/, $raw or die "internal critical: unable parse AS numbers list";
+    @raw = split m/,/x , $raw or croak "internal critical: unable parse AS numbers list";
 
-    foreach my $entry (@intermediate) {
+    foreach my $entry (@raw) {
         if ($entry >= 1 and $entry <= 4294967296) {
             push (@sanitized, $entry);
         } else {
-            warn "$entry : must be integer between 1 and 4294967296";
+            carp "$entry : must be integer between 1 and 4294967296";
         }
     }
 
@@ -99,7 +105,7 @@ sub f_sanitize {
 }
 
 if (defined $cmd{'stdout'} and defined $cmd{'direct'}) {
-    die "--stdout and --direct flags are mutually exclusive!";
+    croak "--stdout and --direct flags are mutually exclusive!";
 } elsif (defined $cmd{'stdout'}) {
     @asns = @{ f_sanitize ($cmd{'stdout'}) };
 } elsif (defined $cmd{'direct'}) {
@@ -108,10 +114,10 @@ if (defined $cmd{'stdout'} and defined $cmd{'direct'}) {
 
 my $IPSET;
 my $BGPQ3;
-if (-X $config{'bgpq3'}) { 
+if (-X $config{'bgpq3'}) {
     $BGPQ3 = $config{'bgpq3'};
 } else {
-    die "critical: bgpq3 tool not found! exit.";
+    croak "critical: bgpq3 tool not found! exit.";
 }
 
 if (defined $cmd{'direct'}) {
@@ -119,19 +125,17 @@ if (defined $cmd{'direct'}) {
         if (-X $config{'ipset'}) {
             $IPSET = $config{'ipset'};
         } else {
-            die "critical: ipset tool not found! exit.";
+            croak "critical: ipset tool not found! exit.";
         }
     } else {
-        die "for --direct mode asn2ipset need root permissions!";
+        croak "for --direct mode asn2ipset need root permissions!";
     }
 }
 
 sub f_help {
 
-    my $help = q {
+    my $help = q {usage: asn2ipset [--prefix <some>] < --direct | --stdout > ASN1,ASN2,ASN3 ...
 
-  usage: asn2ipset [--prefix <some>] < --direct | --stdout > ASN1,ASN2,ASN3 ...
-  
   --help   - print this help
 
   --direct - apply changes directly, need root permissions
@@ -143,17 +147,16 @@ sub f_help {
   examples:
 
            generate ipsets for some Google AS and print it to stdout:
-  
+
            asn2ipset --stdout 15169,19527
 
            generate ipsets for Google AS whith prefix 'google' directly:
 
-           asn2ipset --prefix google --direct 15169,19527
-        
-    };
-        
-say $help;
-        
+           asn2ipset --prefix google --direct 15169,19527};
+
+    say $help;
+
+    return 0;
 }
 
 if (defined $cmd{'help'}) {
@@ -162,10 +165,10 @@ if (defined $cmd{'help'}) {
 
 sub create_meta_ipset {
 
-    my $mode = $_[0];
+    my ($mode) = @_;
 
     if ($mode eq 'direct') {
-    
+
         # Test ipset meta list exists create it, if not
         system ("$IPSET list $IPV4_META_SET_NAME &> /dev/null");
         if ($? == 0) { } else {
@@ -181,16 +184,16 @@ sub create_meta_ipset {
         say "create $IPV4_META_SET_NAME list:set";
         say "create $IPV6_META_SET_NAME list:set";
     }
+
+    return 0;
 }
 
 sub create_ipset {
 
-    my $mode = $_[0];
-    my $name = $_[1];
-    my $family = $_[2];
+    my ($mode, $name, $family) = @_;
     my ($hashsize, $maxelem);
     my $rvalue = -1;
-    
+
     if ($family == 4) {
         $family = 'inet';
         $hashsize = $config{'ipv4_hashsize'};
@@ -200,7 +203,7 @@ sub create_ipset {
         $hashsize = $config{'ipv6_hashsize'};
         $maxelem = $config{'ipv6_maxelem'};
     } else {
-        die "internal critical: unknown family: $family";
+        croak "internal critical: unknown family: $family";
     }
 
     if ($mode eq 'direct') {
@@ -219,25 +222,24 @@ sub create_ipset {
 
 sub lookup_subnets {
 
-    my $as = $_[0];
-    my $family = $_[1];
+    my ($as, $family) = @_;
     my @subnets;
-    
+
 
     if ($family == 4 or $family == 6) { } else {
-        die "internal critical: unknown family: $family";        
+        croak "internal critical: unknown family: $family";
     }
-    
+
     my @out = `$BGPQ3 -$family AS$as | awk '{print \$5}'`;
     foreach my $entry (@out) {
 
-        if ($entry =~ '^0\.0\.0\.0/0$' or 
+        if ($entry =~ '^0\.0\.0\.0/0$' or
             $entry =~ '^::/0$') {
 
-            warn "warning: empty ipv$family AS $as detected!, skipping ...";
+            carp "warning: empty ipv$family AS $as detected!, skipping ...";
             @subnets[0] = 'empty';
         }
-        
+
         if ($entry =~ '^$') { } else {
             push (@subnets, $entry);
         }
@@ -248,8 +250,8 @@ sub lookup_subnets {
 
 sub add_to_ipset {
 
-    my $mode = $_[0];
-    my $ipset = $_[1];
+    my ($mode, $ipset) = @_;
+
     my @new_subnets = @{ $_[2] };
     my $rvalue = -1;
 
@@ -268,9 +270,7 @@ sub add_to_ipset {
 
 sub add_to_meta_ipset {
 
-    my $mode = $_[0];
-    my $ipset = $_[1];
-    my $family = $_[2];
+    my ($mode, $ipset, $family) = @_;
 
     if ($family == 4) {
         if ($mode eq 'direct') {
@@ -283,10 +283,12 @@ sub add_to_meta_ipset {
             system("$IPSET -exist add $IPV6_META_SET_NAME $ipset");
         } elsif ($mode eq 'stdout') {
             say "add $IPV6_META_SET_NAME $ipset";
-        }    
+        }
     } else {
-        die "internal critical: unknown family: $family";     
+        croak "internal critical: unknown family: $family";
     }
+
+    return 0;
 }
 
 if (defined $cmd{'stdout'}) {
@@ -304,10 +306,10 @@ foreach my $n (@asns) {
 }
 
 foreach my $arg (@asns) {
-    
+
     my $as = $arg;
     my @family = (4, 6);
-    
+
     foreach my $fam (@family) {
 
         my @founded = @{ lookup_subnets ($as, $fam) };
@@ -316,24 +318,24 @@ foreach my $arg (@asns) {
         if ($founded[0] eq 'empty') { } else {
 
             my $ipset_name = $PREFIX . '_ipv' . $fam . '_as_' . $arg;
-            
+
             # Print to stdout, if --stdout flag is defined
             if (defined $cmd{'stdout'}) {
                 create_ipset ('stdout', $ipset_name, $fam);
                 add_to_ipset ('stdout', $ipset_name, \@founded);
                 add_to_meta_ipset ('stdout', $ipset_name, $fam);
-                
+
             } elsif (defined $cmd{'direct'}) {
-                
+
                 # Generate and apply ipsets else
-                
-                warn "Create ipv$fam ipset for AS $as ...\n";
+
+                carp "Create ipv$fam ipset for AS $as ...\n";
                 create_ipset ('direct', $ipset_name, $fam);
-    
-                warn "Add ipv$fam subnets for AS $arg to ipset $ipset_name ...\n";
+
+                carp "Add ipv$fam subnets for AS $arg to ipset $ipset_name ...\n";
                 add_to_ipset ('direct', $ipset_name, \@founded);
 
-                warn "Add ipset $ipset_name to meta set ...\n";
+                carp "Add ipset $ipset_name to meta set ...\n";
                 add_to_meta_ipset ('direct', $ipset_name, $fam);
 
             }

@@ -8,7 +8,6 @@
 
 use strict;
 use warnings;
-use diagnostics;
 use utf8;
 use 5.010;
 
@@ -17,7 +16,7 @@ use Carp;
 
 binmode(STDOUT, ":encoding(UTF-8)");
 
-my $VERSION = '210518.0';
+my $VERSION = '21.1';
 
 my %config = (
     'prefix' => 'asn2ipset',
@@ -45,7 +44,7 @@ GetOptions (
     'prefix=s' => \$cmd{'prefix'},
     ) or croak 'unknown option';
 
-if (defined $cmd{'version'}) { carp $VERSION }
+if (defined $cmd{'version'}) { say STDERR $VERSION }
 
 my $IPV4_META_SET_NAME;
 my $IPV6_META_SET_NAME;

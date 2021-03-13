@@ -1,25 +1,26 @@
 asn2ipset
 ---------
 
-Утилита-враппер для создания Linux ipset-ов по номеру автономной системы
+Tool for create Linux ipsets by known autonomous system number(s)
 
-Зависимости:
+Dependencies:
 
-* perl 5.10 или выше
-* bgpq3 - используется для получения списка префиксов по номеру AS, ставится из EPEL
-* ipset - используется для создания ipset (спасибо, кэп)
+* perl 5.10 or above
+* bgpq3 - for getting prefix lists by ASN
+* ipset - for ipsets generating
 
-Использование:
+
+Usage:
 ```
 asn2ipset --help
 ```
 
-Фичи:
+Features:
 
-* для каждого ASN создает отдельный ipset
-* созданные ipset-ы добавляет в мета-ipset, который предназначен для использования в правилах Netfilter
-* умеет в ipv4 и ipv6
-* умеет определять "пустые" AS, в которых нет префиксов
-* _не_ добавляет/изменяет/удаляет никаких правил Netfilter
-* умеет создавать ipset-ы прямо в ядре, либо выводить их на терминал в формате ipset save/restore
-* для создаваемых ipset-ов можно задавать свой префикс имени
+* personal ipset for every ASN
+* IPv4 and IPv6 ipsets support
+* meta-ipsets support (ipsets which contains other ipsets)
+* detecting "empty" AS without network prefixes
+* DONT add/edit/delete any Netfilter (iptables/ip6tables) rules
+* creating ipsets direct in runtime or just printing to stdout in ipset save/restore format
+* setting custom names prefixes for generated ipsets

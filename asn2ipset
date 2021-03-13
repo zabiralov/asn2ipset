@@ -16,7 +16,7 @@ use Carp;
 
 binmode(STDOUT, ":encoding(UTF-8)");
 
-my $VERSION = '21.1';
+my $VERSION = '21.073';
 
 my %config = (
     'prefix' => 'asn2ipset',
